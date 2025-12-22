@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scanner-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scanner-worker
+  template:
+    metadata:
+      labels:
+        app: scanner-worker
+    spec:
+      containers:
+      - name: worker
+        image: vuln-scanner-worker:1.0
+        env:
+        - name: DB_HOST
+          value: "postgres"
+        - name: DB_NAME
+          value: "vuln_scanner"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pg-secret
+              key: POSTGRES_PASSWORD
+        - name: DB_PORT
+          value: "5432"
+
+
+
+
+
+
+

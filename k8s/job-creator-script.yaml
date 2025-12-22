@@ -1,0 +1,153 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: job-creator-script
+  namespace: default
+data:
+  job-creator.py: |
+    import os
+    import time
+    import psycopg2
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+
+    DB_HOST = os.getenv("DB_HOST", "postgres")
+    DB_NAME = os.getenv("DB_NAME", "vuln_scanner")
+    DB_USER = os.getenv("DB_USER", "postgres")
+    DB_PASSWORD = os.getenv("DB_PASSWORD")
+    DB_PORT = os.getenv("DB_PORT", "5432")
+
+    # Load Kubernetes config
+    try:
+        config.load_incluster_config()
+    except:
+        config.load_kube_config()
+
+    batch_v1 = client.BatchV1Api()
+
+    def get_db_connection():
+        return psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT
+        )
+
+    def create_trivy_job(scan_id, image_name):
+        """Create a Kubernetes Job for Trivy scan"""
+        job_name = f"trivy-scan-{scan_id}"
+        
+        # Check if job already exists
+        try:
+            batch_v1.read_namespaced_job(job_name, "default")
+            print(f"Job {job_name} already exists")
+            return
+        except ApiException as e:
+            if e.status != 404:
+                raise
+
+        # Job manifest
+        job_manifest = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": job_name,
+                "labels": {
+                    "app": "trivy-scanner",
+                    "scan-id": str(scan_id)
+                }
+            },
+            "spec": {
+                "ttlSecondsAfterFinished": 300,
+                "backoffLimit": 2,
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "app": "trivy-scanner",
+                            "scan-id": str(scan_id)
+                        }
+                    },
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "trivy-scanner",
+                            "image": "aquasec/trivy:latest",
+                            "command": ["/bin/sh", "-c"],
+                            "args": [
+                                f"""
+                                echo "Scanning image: {image_name} (Scan ID: {scan_id})"
+                                trivy image --format json --output /tmp/results.json {image_name} || exit 1
+                                python3 /app/process-results.py
+                                """
+                            ],
+                            "env": [
+                                {"name": "SCAN_ID", "value": str(scan_id)},
+                                {"name": "IMAGE_NAME", "value": image_name},
+                                {"name": "DB_HOST", "value": "postgres"},
+                                {"name": "DB_NAME", "value": "vuln_scanner"},
+                                {"name": "DB_USER", "value": "postgres"},
+                                {"name": "DB_PASSWORD", "valueFrom": {
+                                    "secretKeyRef": {
+                                        "name": "pg-secret",
+                                        "key": "POSTGRES_PASSWORD"
+                                    }
+                                }},
+                                {"name": "DB_PORT", "value": "5432"}
+                            ],
+                            "volumeMounts": [{
+                                "name": "db-script",
+                                "mountPath": "/app"
+                            }]
+                        }],
+                        "volumes": [{
+                            "name": "db-script",
+                            "configMap": {
+                                "name": "trivy-db-updater"
+                            }
+                        }]
+                    }
+                }
+            }
+        }
+
+        try:
+            batch_v1.create_namespaced_job("default", job_manifest)
+            print(f"Created Job {job_name} for image {image_name}")
+        except ApiException as e:
+            print(f"Error creating job: {e}")
+
+    def main():
+        print("Job Creator started. Polling for PENDING scans...")
+        
+        while True:
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+
+                # Find PENDING scans
+                cur.execute("""
+                    SELECT scans.id, images.name
+                    FROM scans
+                    JOIN images ON scans.image_id = images.id
+                    WHERE scans.status = 'PENDING'
+                    LIMIT 10
+                """)
+
+                pending_scans = cur.fetchall()
+
+                for scan_id, image_name in pending_scans:
+                    print(f"Found PENDING scan: ID={scan_id}, Image={image_name}")
+                    create_trivy_job(scan_id, image_name)
+
+                cur.close()
+                conn.close()
+
+            except Exception as e:
+                print(f"Error in main loop: {e}")
+
+            time.sleep(5)
+
+    if __name__ == "__main__":
+        main()
+

@@ -1,0 +1,57 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trivy-scan-{SCAN_ID}
+  namespace: default
+  labels:
+    app: trivy-scanner
+    scan-id: "{SCAN_ID}"
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: trivy-scanner
+        scan-id: "{SCAN_ID}"
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: trivy-scanner
+        image: aquasec/trivy:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Scanning image: {IMAGE_NAME} (Scan ID: {SCAN_ID})"
+          trivy image --format json --output /tmp/results.json {IMAGE_NAME} || exit 1
+          
+          # Use Python script to update database
+          python3 /app/process-results.py
+        env:
+        - name: SCAN_ID
+          value: "{SCAN_ID}"
+        - name: IMAGE_NAME
+          value: "{IMAGE_NAME}"
+        - name: DB_HOST
+          value: "postgres"
+        - name: DB_NAME
+          value: "vuln_scanner"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pg-secret
+              key: POSTGRES_PASSWORD
+        - name: DB_PORT
+          value: "5432"
+        volumeMounts:
+        - name: db-script
+          mountPath: /app
+      volumes:
+      - name: db-script
+        configMap:
+          name: trivy-db-updater
+
+

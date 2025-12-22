@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-watcher
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-watcher
+  template:
+    metadata:
+      labels:
+        app: job-watcher
+    spec:
+      serviceAccountName: job-watcher-sa
+      containers:
+      - name: job-watcher
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          apk add --no-cache python3 py3-pip postgresql-client
+          pip3 install psycopg2-binary kubernetes
+          python3 /app/job-watcher.py
+        env:
+        - name: DB_HOST
+          value: "postgres"
+        - name: DB_NAME
+          value: "vuln_scanner"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pg-secret
+              key: POSTGRES_PASSWORD
+        - name: DB_PORT
+          value: "5432"
+        volumeMounts:
+        - name: job-watcher-script
+          mountPath: /app
+        - name: kubeconfig
+          mountPath: /root/.kube
+      volumes:
+      - name: job-watcher-script
+        configMap:
+          name: job-watcher-script
+      - name: kubeconfig
+        emptyDir: {}
+
+

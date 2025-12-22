@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-creator
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-creator
+  template:
+    metadata:
+      labels:
+        app: job-creator
+    spec:
+      serviceAccountName: job-creator-sa
+      containers:
+      - name: job-creator
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          apk add --no-cache python3 py3-pip postgresql-client
+          pip3 install psycopg2-binary kubernetes
+          python3 /app/job-creator.py
+        env:
+        - name: DB_HOST
+          value: "postgres"
+        - name: DB_NAME
+          value: "vuln_scanner"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pg-secret
+              key: POSTGRES_PASSWORD
+        - name: DB_PORT
+          value: "5432"
+        volumeMounts:
+        - name: job-creator-script
+          mountPath: /app
+        - name: kubeconfig
+          mountPath: /root/.kube
+      volumes:
+      - name: job-creator-script
+        configMap:
+          name: job-creator-script
+      - name: kubeconfig
+        emptyDir: {}
+
+

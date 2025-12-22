@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: job-watcher-script
+  namespace: default
+data:
+  job-watcher.py: |
+    import os
+    import time
+    import psycopg2
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+
+    DB_HOST = os.getenv("DB_HOST", "postgres")
+    DB_NAME = os.getenv("DB_NAME", "vuln_scanner")
+    DB_USER = os.getenv("DB_USER", "postgres")
+    DB_PASSWORD = os.getenv("DB_PASSWORD")
+    DB_PORT = os.getenv("DB_PORT", "5432")
+
+    # Load Kubernetes config
+    try:
+        config.load_incluster_config()
+    except:
+        config.load_kube_config()
+
+    batch_v1 = client.BatchV1Api()
+
+    def get_db_connection():
+        return psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT
+        )
+
+    def update_scan_status(scan_id, status):
+        """Update scan status in database"""
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            if status == "FAILED":
+                cur.execute("UPDATE scans SET status='FAILED' WHERE id=%s", (scan_id,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error updating scan status: {e}")
+
+    def watch_jobs():
+        """Watch for completed or failed jobs"""
+        print("Job Watcher started. Monitoring jobs...")
+        
+        while True:
+            try:
+                # List all trivy scanner jobs
+                jobs = batch_v1.list_namespaced_job(
+                    namespace="default",
+                    label_selector="app=trivy-scanner"
+                )
+
+                for job in jobs.items:
+                    scan_id = job.metadata.labels.get('scan-id')
+                    if not scan_id:
+                        continue
+
+                    job_name = job.metadata.name
+                    status = job.status
+
+                    # Check if job succeeded
+                    if status.succeeded == 1:
+                        print(f"Job {job_name} completed successfully")
+                        # Job's process-results.py script should have updated DB
+                        # But we can verify here if needed
+
+                    # Check if job failed
+                    elif status.failed and status.failed >= job.spec.backoff_limit:
+                        print(f"Job {job_name} failed after retries")
+                        update_scan_status(int(scan_id), "FAILED")
+
+            except ApiException as e:
+                print(f"Error watching jobs: {e}")
+            except Exception as e:
+                print(f"Error in watch loop: {e}")
+
+            time.sleep(10)
+
+    if __name__ == "__main__":
+        watch_jobs()
+
+
