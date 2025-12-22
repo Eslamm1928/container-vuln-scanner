@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Container Vulnerability Scanner</title>
+    <style>
+        body { font-family: Arial; background: #f4f4f4; }
+        table { width: 80%; margin: auto; border-collapse: collapse; }
+        th, td { padding: 10px; border: 1px solid #ccc; }
+        th { background: #333; color: white; }
+    </style>
+</head>
+<body>
+
+<h2 style="text-align:center;">Vulnerability Scanner Dashboard</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Scan ID</th>
+            <th>Image</th>
+            <th>Status</th>
+            <th>Created</th>
+        </tr>
+    </thead>
+    <tbody id="scans"></tbody>
+</table>
+
+<script>
+// Use environment variable or default to localhost for local development
+const API_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+    ? "http://127.0.0.1:8000" 
+    : "http://scanner-api:8000";
+fetch(`${API_URL}/scans`)
+.then(res => res.json())
+.then(data => {
+    const table = document.getElementById("scans");
+    data.forEach(scan => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+            <td>${scan.scan_id}</td>
+            <td>${scan.image}</td>
+            <td>${scan.status}</td>
+            <td>${scan.created_at}</td>
+        `;
+        table.appendChild(row);
+    });
+});
+</script>
+
+</body>
+</html>
